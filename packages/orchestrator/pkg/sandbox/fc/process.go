@@ -301,6 +301,7 @@ func (p *Process) Create(
 	memoryMB int64,
 	hugePages bool,
 	freePageReporting bool,
+	freePageHinting bool,
 	options ProcessOptions,
 	txRateLimit RateLimiterConfig,
 	driveRateLimit RateLimiterConfig,
@@ -443,7 +444,6 @@ func (p *Process) Create(
 	}
 	telemetry.ReportEvent(ctx, "set fc entropy config")
 
-	freePageHinting := fcSupportsFreePageHinting(p.Versions.FirecrackerVersion) && kernelSupportsFreePageHinting(p.Versions.KernelVersion)
 	if freePageReporting || freePageHinting {
 		if err := p.client.installBalloon(ctx, freePageReporting, freePageHinting); err != nil {
 			fcStopErr := p.Stop(ctx)
@@ -728,7 +728,7 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		span.End()
 	}()
 
-	if !fcSupportsFreePageHinting(p.Versions.FirecrackerVersion) {
+	if !FCSupportsFreePageHinting(p.Versions.FirecrackerVersion) {
 		outcome = "fc-unsupported"
 
 		return nil

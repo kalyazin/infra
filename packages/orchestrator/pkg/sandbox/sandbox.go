@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/launchdarkly/go-sdk-common/v3/ldcontext"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -165,6 +166,17 @@ type RuntimeMetadata struct {
 	// BuildID is the ID of the associated template build.
 	BuildID     string
 	SandboxType SandboxType
+}
+
+// sandboxLDContext builds an LD context with kernel/FC-version attributes so
+// flags evaluated for a sandbox can be targeted by guest kernel or FC version.
+func sandboxLDContext(runtime RuntimeMetadata, config *Config) ldcontext.Context {
+	return ldcontext.NewBuilder(runtime.SandboxID).
+		Kind(featureflags.SandboxKind).
+		SetString(featureflags.SandboxTemplateAttribute, runtime.TemplateID).
+		SetString(featureflags.SandboxKernelVersionAttribute, config.FirecrackerConfig.KernelVersion).
+		SetString(featureflags.SandboxFirecrackerVersionAttribute, config.FirecrackerConfig.FirecrackerVersion).
+		Build()
 }
 
 type Resources struct {
@@ -489,6 +501,9 @@ func (f *Factory) CreateSandbox(
 		return nil
 	})
 
+	freePageHinting := fc.FCSupportsFreePageHinting(config.FirecrackerConfig.FirecrackerVersion) &&
+		f.featureFlags.BoolFlag(ctx, featureflags.FreePageHintingArmFlag, sandboxLDContext(runtime, config))
+
 	err = fcHandle.Create(
 		ctx,
 		sbxlogger.SandboxMetadata{
@@ -500,6 +515,7 @@ func (f *Factory) CreateSandbox(
 		config.RamMB,
 		config.HugePages,
 		config.FreePageReporting,
+		freePageHinting,
 		processOptions,
 		fc.RateLimiterConfig{
 			Ops:       fc.TokenBucketConfig(throttleConfig.Ops),
@@ -1058,8 +1074,10 @@ func (s *Sandbox) Pause(
 	s.Checks.Stop()
 
 	// Drain free-page-hinting before pause so the snapshot doesn't capture
-	// pages the guest already considers free. Timeout=0 disables.
-	if t := time.Duration(s.featureFlags.IntFlag(ctx, featureflags.FreePageHintingTimeoutMs)) * time.Millisecond; t > 0 {
+	// pages the guest already considers free. Timeout=0 disables. Evaluated
+	// with kernel-version LD context so operators can roll out only on guests
+	// with the kernel race fix.
+	if t := time.Duration(s.featureFlags.IntFlag(ctx, featureflags.FreePageHintingTimeoutMs, sandboxLDContext(s.Runtime, s.Config))) * time.Millisecond; t > 0 {
 		drainCtx, cancel := context.WithTimeout(ctx, t)
 		if err := s.process.DrainBalloon(drainCtx); err != nil {
 			telemetry.ReportError(ctx, "balloon hinting drain failed (continuing pause)", err)

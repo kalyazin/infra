@@ -123,6 +123,11 @@ var (
 	SandboxLabelBasedSchedulingFlag  = NewBoolFlag("sandbox-label-based-scheduling", false)
 	OptimisticResourceAccountingFlag = NewBoolFlag("sandbox-placement-optimistic-resource-accounting", false)
 	FreePageReportingFlag            = NewBoolFlag("free-page-reporting", false)
+	// FreePageHintingArmFlag arms FreePageHinting=true on the balloon at
+	// install. Just having FPH on the balloon doesn't trigger the kernel race
+	// fixed in https://lore.kernel.org/lkml/20240429125100.7393-1-david@redhat.com/
+	// — that race is on the actual hinting flow, gated by FreePageHintingTimeoutMs.
+	FreePageHintingArmFlag = NewBoolFlag("free-page-hinting-arm", false)
 
 	NetworkTransformRulesFlag = NewBoolFlag("network-transform-rules", env.IsDevelopment())
 )
@@ -163,8 +168,10 @@ var (
 	BestOfKMaxOvercommit          = NewIntFlag("best-of-k-max-overcommit", 400)              // Default R=4 (stored as percentage, max over-commit ratio)
 	BestOfKAlpha                  = NewIntFlag("best-of-k-alpha", 50)                        // Default Alpha=0.5 (stored as percentage for int flag, current usage weight)
 	EnvdInitTimeoutMilliseconds   = NewIntFlag("envd-init-request-timeout-milliseconds", 50) // Timeout for envd init request in milliseconds
-	// FreePageHintingTimeoutMs gates a pre-pause balloon free-page-hinting drain. 0 disables.
-	FreePageHintingTimeoutMs      = NewIntFlag("free-page-hinting-timeout-ms", 0)
+	// FreePageHintingTimeoutMs gates the pre-pause balloon FPH drain. 0
+	// disables. Evaluated with sandbox/kernel-version LD context so operators
+	// can roll out only on guests with the kernel race fix.
+	FreePageHintingTimeoutMs = NewIntFlag("free-page-hinting-timeout-ms", 0)
 	HostStatsSamplingInterval     = NewIntFlag("host-stats-sampling-interval", 5000) // Host stats sampling interval in milliseconds (default 5s)
 	MaxCacheWriterConcurrencyFlag = NewIntFlag("max-cache-writer-concurrency", 10)
 
