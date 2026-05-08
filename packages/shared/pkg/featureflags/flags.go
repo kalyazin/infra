@@ -171,7 +171,7 @@ var (
 	// FreePageHintingTimeoutMs gates the pre-pause balloon FPH drain. 0
 	// disables. Evaluated with sandbox/kernel-version LD context so operators
 	// can roll out only on guests with the kernel race fix.
-	FreePageHintingTimeoutMs = NewIntFlag("free-page-hinting-timeout-ms", 0)
+	FreePageHintingTimeoutMs      = NewIntFlag("free-page-hinting-timeout-ms", 0)
 	HostStatsSamplingInterval     = NewIntFlag("host-stats-sampling-interval", 5000) // Host stats sampling interval in milliseconds (default 5s)
 	MaxCacheWriterConcurrencyFlag = NewIntFlag("max-cache-writer-concurrency", 10)
 
