@@ -443,14 +443,17 @@ func (p *Process) Create(
 	}
 	telemetry.ReportEvent(ctx, "set fc entropy config")
 
-	if freePageReporting {
-		freePageHinting := fcSupportsFreePageHinting(p.Versions.FirecrackerVersion) && kernelSupportsFreePageHinting(p.Versions.KernelVersion)
+	freePageHinting := fcSupportsFreePageHinting(p.Versions.FirecrackerVersion) && kernelSupportsFreePageHinting(p.Versions.KernelVersion)
+	if freePageReporting || freePageHinting {
 		if err := p.client.installBalloon(ctx, freePageReporting, freePageHinting); err != nil {
 			fcStopErr := p.Stop(ctx)
 
 			return errors.Join(fmt.Errorf("error installing balloon device: %w", err), fcStopErr)
 		}
-		telemetry.ReportEvent(ctx, "installed balloon device", attribute.Bool("balloon.free_page_hinting", freePageHinting))
+		telemetry.ReportEvent(ctx, "installed balloon device",
+			attribute.Bool("balloon.free_page_reporting", freePageReporting),
+			attribute.Bool("balloon.free_page_hinting", freePageHinting),
+		)
 	}
 
 	err = p.client.startVM(ctx)

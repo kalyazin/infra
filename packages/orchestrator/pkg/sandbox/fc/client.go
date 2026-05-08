@@ -427,6 +427,9 @@ func (c *apiClient) startVM(ctx context.Context) error {
 	return nil
 }
 
+// installBalloon attaches a zero-MiB balloon device. Individual balloon
+// features (free-page-reporting, free-page-hinting) are toggled via
+// parameters so callers can opt in to any subset independently.
 func (c *apiClient) installBalloon(ctx context.Context, freePageReporting, freePageHinting bool) error {
 	ctx, span := tracer.Start(ctx, "install-balloon")
 	defer span.End()
@@ -446,7 +449,7 @@ func (c *apiClient) installBalloon(ctx context.Context, freePageReporting, freeP
 
 	_, err := c.client.Operations.PutBalloon(&balloonConfig)
 	if err != nil {
-		return fmt.Errorf("error setting up balloon device: %w", err)
+		return fmt.Errorf("error installing balloon device: %w", err)
 	}
 
 	return nil
