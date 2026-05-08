@@ -1073,6 +1073,11 @@ func (s *Sandbox) Pause(
 	// Stop the health check before pausing the VM
 	s.Checks.Stop()
 
+	// Best-effort pre-pause guest reclaim (fstrim, sync, drop_caches,
+	// compact_memory) on the live VM via envd. Per-step caps are LD-flag-driven;
+	// all default to 0 which disables the chain entirely. Non-fatal.
+	s.bestEffortReclaim(ctx)
+
 	// Drain free-page-hinting before pause so the snapshot doesn't capture
 	// pages the guest already considers free. Timeout=0 disables. Evaluated
 	// with kernel-version LD context so operators can roll out only on guests
