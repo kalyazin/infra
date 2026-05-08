@@ -123,11 +123,12 @@ var (
 	SandboxLabelBasedSchedulingFlag  = NewBoolFlag("sandbox-label-based-scheduling", false)
 	OptimisticResourceAccountingFlag = NewBoolFlag("sandbox-placement-optimistic-resource-accounting", false)
 	FreePageReportingFlag            = NewBoolFlag("free-page-reporting", false)
-	// FreePageHintingArmFlag arms FreePageHinting=true on the balloon at
-	// install. Just having FPH on the balloon doesn't trigger the kernel race
-	// fixed in https://lore.kernel.org/lkml/20240429125100.7393-1-david@redhat.com/
+	// FreePageHintingInstallFlag controls whether FreePageHinting=true is
+	// configured on the balloon at install time. Just having FPH on the
+	// balloon doesn't trigger the kernel race fixed in
+	// https://lore.kernel.org/lkml/20240429125100.7393-1-david@redhat.com/
 	// — that race is on the actual hinting flow, gated by FreePageHintingTimeoutMs.
-	FreePageHintingArmFlag = NewBoolFlag("free-page-hinting-arm", false)
+	FreePageHintingInstallFlag = NewBoolFlag("free-page-hinting-install", false)
 
 	NetworkTransformRulesFlag = NewBoolFlag("network-transform-rules", env.IsDevelopment())
 )

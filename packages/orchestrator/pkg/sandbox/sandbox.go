@@ -502,7 +502,7 @@ func (f *Factory) CreateSandbox(
 	})
 
 	freePageHinting := fc.FCSupportsFreePageHinting(config.FirecrackerConfig.FirecrackerVersion) &&
-		f.featureFlags.BoolFlag(ctx, featureflags.FreePageHintingArmFlag, sandboxLDContext(runtime, config))
+		f.featureFlags.BoolFlag(ctx, featureflags.FreePageHintingInstallFlag, sandboxLDContext(runtime, config))
 
 	err = fcHandle.Create(
 		ctx,
