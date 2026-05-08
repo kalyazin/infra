@@ -734,6 +734,23 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		return nil
 	}
 
+	// Snapshot the host_cmd before starting so we can detect a true bump
+	// from this drain rather than reading stale counters carried over from a
+	// previous drain that was snapshotted then restored. host_cmd is monotonic.
+	hostBefore, _, err := p.client.describeBalloonHinting(ctx)
+	if err != nil {
+		var notConfigured *operations.DescribeBalloonHintingBadRequest
+		if errors.As(err, &notConfigured) {
+			outcome = "not-configured"
+
+			return nil
+		}
+
+		outcome = "describe-failed"
+
+		return fmt.Errorf("balloon hinting baseline: %w", err)
+	}
+
 	if err := p.client.startBalloonHinting(ctx, true); err != nil {
 		var notConfigured *operations.StartBalloonHintingBadRequest
 		if errors.As(err, &notConfigured) {
@@ -763,9 +780,11 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 
 			return fmt.Errorf("balloon hinting status: %w", err)
 		}
-		// host_cmd is monotonic; require host > 0 to avoid a false-positive
-		// completion before FC has accepted the start.
-		if host > 0 && guest >= host {
+		// Require a strict bump over the pre-start baseline to avoid
+		// a false-positive completion before FC's VMM thread has accepted
+		// the start (the API thread ack/VMM bump race), including the
+		// resume-from-snapshot case where counters restore non-zero.
+		if host > hostBefore && guest >= host {
 			return nil
 		}
 		backoff = min(backoff*2, 50*time.Millisecond)
