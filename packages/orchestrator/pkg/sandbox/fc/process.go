@@ -717,8 +717,14 @@ func (p *Process) Pause(ctx context.Context) error {
 	return p.client.pauseVM(ctx)
 }
 
-// DrainBalloon triggers a free-page-hinting run and blocks until the guest
-// acknowledges or ctx fires. No-op on FC < v1.14 and when no balloon is
+// freePageHintDone mirrors FC's FREE_PAGE_HINT_DONE: the host_cmd value FC
+// writes back after the guest's FREE_PAGE_HINT_STOP, when the start command
+// had acknowledge_on_stop=true. Only signal that every queued page-block
+// descriptor was processed.
+const freePageHintDone int64 = 1
+
+// DrainBalloon triggers a free-page-hinting run and blocks until the cycle
+// completes or ctx fires. No-op on FC < v1.14 and when no balloon is
 // configured (FC returns 400).
 func (p *Process) DrainBalloon(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "drain-balloon")
@@ -734,9 +740,8 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		return nil
 	}
 
-	// Snapshot the host_cmd before starting so we can detect a true bump
-	// from this drain rather than reading stale counters carried over from a
-	// previous drain that was snapshotted then restored. host_cmd is monotonic.
+	// Snapshot host_cmd to require a strict bump on this cycle and ignore
+	// stale counters restored from a snapshot.
 	hostBefore, _, err := p.client.describeBalloonHinting(ctx)
 	if err != nil {
 		var notConfigured *operations.DescribeBalloonHintingBadRequest
@@ -751,6 +756,8 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		return fmt.Errorf("balloon hinting baseline: %w", err)
 	}
 
+	// acknowledge_on_stop=true so FC writes host_cmd back to freePageHintDone
+	// on the guest's STOP — that transition is what we wait on below.
 	if err := p.client.startBalloonHinting(ctx, true); err != nil {
 		var notConfigured *operations.StartBalloonHintingBadRequest
 		if errors.As(err, &notConfigured) {
@@ -765,6 +772,7 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 	}
 
 	backoff := 5 * time.Millisecond
+	sawBump := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -774,17 +782,20 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		case <-time.After(backoff):
 		}
 
-		host, guest, err := p.client.describeBalloonHinting(ctx)
+		host, _, err := p.client.describeBalloonHinting(ctx)
 		if err != nil {
 			outcome = "describe-failed"
 
 			return fmt.Errorf("balloon hinting status: %w", err)
 		}
-		// Require a strict bump over the pre-start baseline to avoid
-		// a false-positive completion before FC's VMM thread has accepted
-		// the start (the API thread ack/VMM bump race), including the
-		// resume-from-snapshot case where counters restore non-zero.
-		if host > hostBefore && guest >= host {
+		// guest_cmd flips to host_cmd on the driver's initial cmd_id_start
+		// descriptor, before any page-blocks are processed, so it cannot
+		// signal completion. Wait for host_cmd to return to freePageHintDone
+		// after a confirmed bump — FC sets that only post-guest-STOP.
+		if host > hostBefore {
+			sawBump = true
+		}
+		if sawBump && host == freePageHintDone {
 			return nil
 		}
 		backoff = min(backoff*2, 50*time.Millisecond)
