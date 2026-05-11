@@ -742,7 +742,7 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 
 	// Snapshot host_cmd to require a strict bump on this cycle and ignore
 	// stale counters restored from a snapshot.
-	hostBefore, _, err := p.client.describeBalloonHinting(ctx)
+	hostBefore, err := p.client.describeBalloonHinting(ctx)
 	if err != nil {
 		var notConfigured *operations.DescribeBalloonHintingBadRequest
 		if errors.As(err, &notConfigured) {
@@ -782,7 +782,7 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		case <-time.After(backoff):
 		}
 
-		host, _, err := p.client.describeBalloonHinting(ctx)
+		host, err := p.client.describeBalloonHinting(ctx)
 		if err != nil {
 			outcome = "describe-failed"
 

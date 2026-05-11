@@ -468,18 +468,17 @@ func (c *apiClient) startBalloonHinting(ctx context.Context, acknowledgeOnStop b
 	return nil
 }
 
-func (c *apiClient) describeBalloonHinting(ctx context.Context) (hostCmd, guestCmd int64, err error) {
+func (c *apiClient) describeBalloonHinting(ctx context.Context) (hostCmd int64, err error) {
 	params := operations.DescribeBalloonHintingParams{Context: ctx}
 	res, err := c.client.Operations.DescribeBalloonHinting(&params)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 	if res.Payload.HostCmd != nil {
 		hostCmd = *res.Payload.HostCmd
 	}
-	guestCmd = res.Payload.GuestCmd
 
-	return hostCmd, guestCmd, nil
+	return hostCmd, nil
 }
 
 func (c *apiClient) memoryMapping(ctx context.Context) (*memory.Mapping, error) {
