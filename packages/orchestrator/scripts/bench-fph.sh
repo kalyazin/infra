@@ -52,7 +52,11 @@ done
 
 cd "$(dirname "$0")/.."
 
-exec go run ./cmd/resume-build \
+# Honour an explicit $GO so users on Mise/asdf can pass the right go binary
+# through sudo (snap's /snap/bin/go is often the wrong version).
+GO_BIN="${GO:-go}"
+
+exec "$GO_BIN" run ./cmd/resume-build \
   -from-build "$BUILD_ID" \
   -fph-bench \
   -cmd-pause "$WORKLOAD" \
