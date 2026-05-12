@@ -134,6 +134,11 @@ type Process struct {
 	Exit *utils.ErrorOnce
 
 	client *apiClient
+
+	// balloonAccum holds the cumulative virtio-balloon counters across
+	// all FC metrics flushes. FC's SharedIncMetric resets on each flush,
+	// so the metrics-reader goroutine sums per-line deltas into here.
+	balloonAccum atomic.Pointer[BalloonMetricsSnapshot]
 }
 
 func NewProcess(
@@ -747,6 +752,11 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		return nil
 	}
 
+	// Snapshot balloon counters so we can attribute hinted_count/hinted_bytes
+	// to this drain. Best-effort — never fail the drain if metrics aren't
+	// available yet (no flush has happened).
+	before := p.BalloonMetrics()
+
 	// acknowledge_on_stop=true so FC writes host_cmd back to freePageHintDone
 	// on the guest's STOP — that transition is what we wait on below.
 	if err := p.client.startBalloonHinting(ctx, true); err != nil {
@@ -770,6 +780,16 @@ func (p *Process) DrainBalloon(ctx context.Context) error {
 		}
 
 		return err
+	}
+
+	// Flush + read balloon metrics so an operator can see how much this
+	// specific drain actually freed (hinted_count == 0 with outcome=ok
+	// means the drain "succeeded" but the guest had nothing free to hint).
+	if after, err := p.FlushAndReadBalloonMetrics(ctx); err == nil {
+		span.SetAttributes(
+			attribute.Int64("drain-balloon.hinted_count", int64(after.HintCount-before.HintCount)),
+			attribute.Int64("drain-balloon.hinted_bytes", int64(after.HintFreed-before.HintFreed)),
+		)
 	}
 
 	return nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -106,10 +107,107 @@ type firecrackerBlockMetrics struct {
 	RemainingReqsCount         uint64 `json:"remaining_reqs_count"`
 }
 
+// firecrackerBalloonMetrics is the subset of Firecracker's BalloonDeviceMetrics
+// we care about. Counters are SharedIncMetric — each flush emits the delta
+// since the previous serialize, so we accumulate them in the reader to expose
+// a cumulative-since-FC-start view via Process.BalloonMetrics.
+type firecrackerBalloonMetrics struct {
+	FreePageHintCount   uint64 `json:"free_page_hint_count"`
+	FreePageHintFreed   uint64 `json:"free_page_hint_freed"`
+	FreePageHintFails   uint64 `json:"free_page_hint_fails"`
+	FreePageReportCount uint64 `json:"free_page_report_count"`
+	FreePageReportFreed uint64 `json:"free_page_report_freed"`
+	FreePageReportFails uint64 `json:"free_page_report_fails"`
+}
+
 // firecrackerMetrics is the top-level structure of one Firecracker metrics JSON line.
 type firecrackerMetrics struct {
-	Net   firecrackerNetMetrics   `json:"net"`
-	Block firecrackerBlockMetrics `json:"block"`
+	Net     firecrackerNetMetrics     `json:"net"`
+	Block   firecrackerBlockMetrics   `json:"block"`
+	Balloon firecrackerBalloonMetrics `json:"balloon"`
+}
+
+// BalloonMetricsSnapshot is the cumulative-since-FC-start view of
+// virtio-balloon counters, exposed via Process.BalloonMetrics for tests
+// that need to assert the orchestrator actually drove an FPH cycle (e.g.
+// post-DrainBalloon, FreePageHintCount should be > 0 when the workload
+// freed pages).
+type BalloonMetricsSnapshot struct {
+	HintCount   uint64
+	HintFreed   uint64
+	HintFails   uint64
+	ReportCount uint64
+	ReportFreed uint64
+	ReportFails uint64
+}
+
+// fphFlushReadTimeout caps how long FlushAndReadBalloonMetrics waits for the
+// metrics-reader goroutine to consume the line FC writes in response to our
+// FlushMetrics request. 2 s is generous given the FIFO write+scanner latency
+// is sub-millisecond locally; tests/bench use this as an end-of-iteration
+// snapshot, so we'd rather time out than block indefinitely on a wedged reader.
+const fphFlushReadTimeout = 2 * time.Second
+
+// accumulateBalloon folds one Firecracker metrics line's balloon counters
+// into the running cumulative snapshot. FC's SharedIncMetric resets on each
+// serialize, so each line is a delta — the cumulative-since-FC-start view
+// is the running sum.
+func accumulateBalloon(prev *BalloonMetricsSnapshot, b firecrackerBalloonMetrics) BalloonMetricsSnapshot {
+	next := BalloonMetricsSnapshot{
+		HintCount:   b.FreePageHintCount,
+		HintFreed:   b.FreePageHintFreed,
+		HintFails:   b.FreePageHintFails,
+		ReportCount: b.FreePageReportCount,
+		ReportFreed: b.FreePageReportFreed,
+		ReportFails: b.FreePageReportFails,
+	}
+	if prev != nil {
+		next.HintCount += prev.HintCount
+		next.HintFreed += prev.HintFreed
+		next.HintFails += prev.HintFails
+		next.ReportCount += prev.ReportCount
+		next.ReportFreed += prev.ReportFreed
+		next.ReportFails += prev.ReportFails
+	}
+
+	return next
+}
+
+// BalloonMetrics returns the cumulative virtio-balloon counters observed so
+// far. Returns the zero value if no metrics line has been processed yet.
+func (p *Process) BalloonMetrics() BalloonMetricsSnapshot {
+	if cur := p.balloonAccum.Load(); cur != nil {
+		return *cur
+	}
+
+	return BalloonMetricsSnapshot{}
+}
+
+// FlushAndReadBalloonMetrics triggers an FC metrics flush and waits for the
+// metrics-reader goroutine to ingest the resulting line, then returns the
+// updated cumulative snapshot. Use this after operations that should have
+// produced balloon activity (e.g. DrainBalloon) to assert FC actually
+// processed the cycle.
+func (p *Process) FlushAndReadBalloonMetrics(ctx context.Context) (BalloonMetricsSnapshot, error) {
+	pre := p.balloonAccum.Load()
+	if err := p.client.flushMetrics(ctx); err != nil {
+		return BalloonMetricsSnapshot{}, fmt.Errorf("flush metrics: %w", err)
+	}
+
+	deadline := time.Now().Add(fphFlushReadTimeout)
+	for {
+		if cur := p.balloonAccum.Load(); cur != pre {
+			return p.BalloonMetrics(), nil
+		}
+		if time.Now().After(deadline) {
+			return p.BalloonMetrics(), errors.New("timeout waiting for fresh balloon metrics line")
+		}
+		select {
+		case <-time.After(5 * time.Millisecond):
+		case <-ctx.Done():
+			return p.BalloonMetrics(), ctx.Err()
+		}
+	}
 }
 
 // startMetricsReader opens the metrics FIFO and starts a goroutine that reads
@@ -260,6 +358,10 @@ func (p *Process) startMetricsReader(ctx context.Context) {
 			if b.NoAvailBuffer > 0 {
 				fcBlockNoAvailBuffer.Add(ctx, int64(b.NoAvailBuffer))
 			}
+
+			// Balloon: SharedIncMetric resets on flush, so accumulate.
+			next := accumulateBalloon(p.balloonAccum.Load(), m.Balloon)
+			p.balloonAccum.Store(&next)
 		}
 
 		if err := scanner.Err(); err != nil {

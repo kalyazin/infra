@@ -1170,6 +1170,13 @@ func (s *Sandbox) Pause(
 	}, nil
 }
 
+// FlushAndReadBalloonMetrics triggers an FC metrics flush and returns the
+// updated cumulative virtio-balloon counters. Used by tests/bench to verify
+// FPH actually drove a hinting cycle (HintCount > 0 after a drain).
+func (s *Sandbox) FlushAndReadBalloonMetrics(ctx context.Context) (fc.BalloonMetricsSnapshot, error) {
+	return s.process.FlushAndReadBalloonMetrics(ctx)
+}
+
 // MemoryPrefetchData returns the ordered page fault data for prefetch mapping.
 func (s *Sandbox) MemoryPrefetchData(ctx context.Context) (block.PrefetchData, error) {
 	prefetchData, err := s.Resources.memory.PrefetchData(ctx)

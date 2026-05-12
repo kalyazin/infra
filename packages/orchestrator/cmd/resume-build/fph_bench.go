@@ -32,6 +32,10 @@ const fphBenchDrainTimeout = 5 * time.Second
 // fphBenchSample is a single iteration's measurement.
 type fphBenchSample struct {
 	memfileBytes int64
+	hintCount    uint64
+	hintBytes    uint64
+	reportCount  uint64
+	reportBytes  uint64
 	resume       time.Duration
 	pause        time.Duration
 	err          error
@@ -78,8 +82,31 @@ func (r *runner) fphBench(ctx context.Context, opts fphBenchOptions) error {
 	printFphBenchSummary("FPR-only", noFph)
 	printFphBenchSummary("FPR + FPH", withFph)
 	printFphBenchDelta(noFph, withFph)
+	checkFphActuallyHinted(withFph)
 
 	return firstErr(noFph, withFph)
+}
+
+// checkFphActuallyHinted is the orchestrator-level health check: if the
+// FPR+FPH arm reports zero hint_count across all iterations, FC never
+// processed any FPH descriptors. That means either the orchestrator's drain
+// is broken (regression of the previous sawBump-style hang) or the workload
+// freed nothing (in which case the bench can't validate either way).
+func checkFphActuallyHinted(samples []fphBenchSample) {
+	ok := successfulSamples(samples)
+	if len(ok) == 0 {
+		return
+	}
+	for _, s := range ok {
+		if s.hintCount > 0 {
+			return
+		}
+	}
+	fmt.Println()
+	fmt.Println("   ⚠️  FPR+FPH arm reported hint_count=0 across all iterations.")
+	fmt.Println("      Either DrainBalloon isn't actually driving an FPH cycle, or the")
+	fmt.Println("      workload didn't free anything. Try a heavier workload (the default")
+	fmt.Println("      frees ~256 MiB) or check the trace span 'drain-balloon'.")
 }
 
 // fphBenchOnce runs one resume → workload → optional delay → pause cycle and
@@ -137,6 +164,11 @@ func (r *runner) fphBenchOnce(ctx context.Context, opts fphBenchOptions, withFph
 	}
 	defer snapshot.Close(context.WithoutCancel(ctx))
 
+	// Read FC balloon counters before we tear down the FC process. Tells
+	// us how many MAX_ORDER-1 (4 MiB) blocks the guest hinted/reported,
+	// independent of the memfile-size signal.
+	balloon, _ := sbx.FlushAndReadBalloonMetrics(ctx)
+
 	upload, err := sandbox.NewUpload(ctx, nil, snapshot, r.storage, storage.CompressConfig{}, nil, "", nil)
 	if err != nil {
 		return fphBenchSample{resume: resumeDur, pause: pauseDur, err: fmt.Errorf("upload prepare: %w", err)}
@@ -153,7 +185,15 @@ func (r *runner) fphBenchOnce(ctx context.Context, opts fphBenchOptions, withFph
 	// Reclaim the snapshot dir so a long bench doesn't fill up the disk.
 	cleanupLocalBuild(buildID)
 
-	return fphBenchSample{memfileBytes: memfileBytes, resume: resumeDur, pause: pauseDur}
+	return fphBenchSample{
+		memfileBytes: memfileBytes,
+		hintCount:    balloon.HintCount,
+		hintBytes:    balloon.HintFreed,
+		reportCount:  balloon.ReportCount,
+		reportBytes:  balloon.ReportFreed,
+		resume:       resumeDur,
+		pause:        pauseDur,
+	}
 }
 
 // readLocalMemfileSize returns the on-disk size of the memfile data layer for
@@ -183,8 +223,11 @@ func fphBenchSampleString(s fphBenchSample) string {
 		return fmt.Sprintf("❌ %v", s.err)
 	}
 
-	return fmt.Sprintf("memfile=%s  (resume %s, pause %s)",
-		fmtBytes(s.memfileBytes), fmtDur(s.resume), fmtDur(s.pause))
+	return fmt.Sprintf("memfile=%s  fpr=%d/%s  fph=%d/%s  (resume %s, pause %s)",
+		fmtBytes(s.memfileBytes),
+		s.reportCount, fmtBytes(int64(s.reportBytes)),
+		s.hintCount, fmtBytes(int64(s.hintBytes)),
+		fmtDur(s.resume), fmtDur(s.pause))
 }
 
 func printFphBenchSummary(label string, samples []fphBenchSample) {
@@ -197,10 +240,14 @@ func printFphBenchSummary(label string, samples []fphBenchSample) {
 
 	bytesAvg, bytesStd := meanStd(intSlice(ok, func(s fphBenchSample) int64 { return s.memfileBytes }))
 	pauseAvg, _ := meanStd(intSlice(ok, func(s fphBenchSample) int64 { return int64(s.pause) }))
+	fphAvg, _ := meanStd(intSlice(ok, func(s fphBenchSample) int64 { return int64(s.hintBytes) }))
+	fprAvg, _ := meanStd(intSlice(ok, func(s fphBenchSample) int64 { return int64(s.reportBytes) }))
 
-	fmt.Printf("   %-9s: memfile %s ± %s  pause avg %s  (n=%d)\n",
+	fmt.Printf("   %-9s: memfile %s ± %s  fpr_freed %s  fph_freed %s  pause avg %s  (n=%d)\n",
 		label,
 		fmtBytes(int64(bytesAvg)), fmtBytes(int64(bytesStd)),
+		fmtBytes(int64(fprAvg)),
+		fmtBytes(int64(fphAvg)),
 		fmtDur(time.Duration(pauseAvg)),
 		len(ok))
 }
