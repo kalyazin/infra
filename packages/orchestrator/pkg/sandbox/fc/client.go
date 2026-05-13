@@ -2,11 +2,13 @@ package fc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/firecracker-microvm/firecracker-go-sdk"
+	openapiruntime "github.com/go-openapi/runtime"
 	"github.com/go-openapi/strfmt"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/template"
@@ -462,6 +464,14 @@ func (c *apiClient) startBalloonHinting(ctx context.Context, acknowledgeOnStop b
 	}
 	_, err := c.client.Operations.StartBalloonHinting(&params)
 	if err != nil {
+		// FC returns 204 (no content) on success, but the FC OpenAPI spec only
+		// declares 200/400 — go-swagger treats any other 2xx as "unexpected
+		// success" and surfaces it as a *runtime.APIError. Honour the 2xx.
+		var apiErr *openapiruntime.APIError
+		if errors.As(err, &apiErr) && apiErr.IsSuccess() {
+			return nil
+		}
+
 		return fmt.Errorf("error starting balloon hinting: %w", err)
 	}
 
