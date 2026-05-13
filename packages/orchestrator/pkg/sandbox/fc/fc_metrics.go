@@ -191,7 +191,10 @@ func (p *Process) BalloonMetrics() BalloonMetricsSnapshot {
 func (p *Process) FlushAndReadBalloonMetrics(ctx context.Context) (BalloonMetricsSnapshot, error) {
 	pre := p.balloonAccum.Load()
 	if err := p.client.flushMetrics(ctx); err != nil {
-		return BalloonMetricsSnapshot{}, fmt.Errorf("flush metrics: %w", err)
+		// FC may already be torn down (e.g. by Pause's rootfs-export goroutine).
+		// Return the last cumulative snapshot the reader observed rather than a
+		// zero value — callers usually want the pre-teardown state.
+		return p.BalloonMetrics(), fmt.Errorf("flush metrics: %w", err)
 	}
 
 	deadline := time.Now().Add(fphFlushReadTimeout)
