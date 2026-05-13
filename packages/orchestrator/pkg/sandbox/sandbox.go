@@ -1094,6 +1094,12 @@ func (s *Sandbox) Pause(
 		return nil, fmt.Errorf("failed to pause VM: %w", err)
 	}
 
+	// Flush FC's balloon counters into our cumulative snapshot before the
+	// rootfs export goroutine closes the FC process (see
+	// rootfs.NBDProvider.ExportDiff). This is the latest point at which the
+	// FC API socket is still alive. Best-effort.
+	_, _ = s.process.FlushAndReadBalloonMetrics(ctx)
+
 	// Snapfile is not closed as it's returned and cached for later use (like resume)
 	snapfile := template.NewLocalFileLink(cachePaths.CacheSnapfile())
 	cleanup.AddNoContext(ctx, snapfile.Close)
