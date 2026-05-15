@@ -259,6 +259,11 @@ func (c *Cache) Dedup(
 				)
 			}
 
+			// build.File.ReadAt skips writes for uuid.Nil mappings and relies
+			// on the caller to pre-zero the buffer; baseBuf is reused across
+			// iterations, so without this clear we would compare srcBuf
+			// against stale bytes for any region the base serves as zero.
+			clear(baseBuf)
 			if _, err := originalMemfile.ReadAt(ctx, baseBuf, r.Start+chunkOff); err != nil {
 				return nil, nil, errors.Join(
 					fmt.Errorf("read original memfile at %d: %w", r.Start+chunkOff, err),
