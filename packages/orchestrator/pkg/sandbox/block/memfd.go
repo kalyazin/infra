@@ -146,6 +146,12 @@ func dedupRange(
 			return off, err
 		}
 
+		// build.File.ReadAt skips writes for uuid.Nil mappings and relies on
+		// the caller to pre-zero the buffer; buff is reused across chunkOff
+		// iterations (and across dedupRange calls — caller allocates once),
+		// so without this clear we would compare srcBuf against stale bytes
+		// for any region the parent serves as zero. Mirrors Cache.Dedup.
+		clear(buff)
 		_, err = originalMemfile.ReadAt(ctx, buff, r.Start+chunkOff)
 		if err != nil {
 			return off, fmt.Errorf("failed to read original memfile at offset %d: %w", r.Start+chunkOff, err)
