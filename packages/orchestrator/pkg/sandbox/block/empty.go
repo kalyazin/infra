@@ -19,11 +19,24 @@ type Empty struct {
 var _ ReadonlyDevice = (*Empty)(nil)
 
 func NewEmpty(size int64, blockSize int64, buildID uuid.UUID) (*Empty, error) {
+	// An Empty device has no real backing data; its single covering mapping
+	// MUST be uuid.Nil so that (a) reads at this device fall through to
+	// zero-fill (build.File.ReadAt skips uuid.Nil ranges, callers pre-zero
+	// the buffer), and (b) MergeMappings + NormalizeMappings on a diff layer
+	// keep the Empty mapping distinct from the diff's BuildID-tagged ranges.
+	// If we used metadata.BuildId (== buildID) here, the diff layered on top
+	// (same BuildID) would be collapsed into one large mapping that points
+	// to the wrong BSOs in the diff file.
 	h, err := header.NewHeader(header.NewTemplateMetadata(
 		buildID,
 		uint64(blockSize),
 		uint64(size),
-	), nil)
+	), []header.BuildMap{{
+		Offset:             0,
+		Length:             uint64(size),
+		BuildId:            uuid.Nil,
+		BuildStorageOffset: 0,
+	}})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create header: %w", err)
 	}
